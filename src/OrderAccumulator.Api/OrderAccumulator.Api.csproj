@@ -10,4 +10,10 @@
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\OrderAccumulator.Application\OrderAccumulator.Application.csproj" />
+    <ProjectReference Include="..\OrderAccumulator.Infrastructure\OrderAccumulator.Infrastructure.csproj" />
+    <ProjectReference Include="..\OrderExposure.ServiceDefaults\OrderExposure.ServiceDefaults.csproj" />
+  </ItemGroup>
+
 </Project>
