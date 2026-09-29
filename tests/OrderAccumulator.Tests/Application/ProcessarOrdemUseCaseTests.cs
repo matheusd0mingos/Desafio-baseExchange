@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using OrderAccumulator.Application.Concorrencia;
 using OrderAccumulator.Application.Observers;
 using OrderAccumulator.Application.UseCases.ProcessarOrdem;
 using OrderAccumulator.Domain.Exposicoes.Events;
@@ -10,19 +9,18 @@ namespace OrderAccumulator.Tests.Application;
 
 public class ProcessarOrdemUseCaseTests
 {
-    private readonly RepositorioFake _repositorio = new();
-    private readonly EventLogFake _log = new();
+    private readonly BancoFake _banco = new();
     private readonly ObserverFake _observer = new();
     private readonly ProcessarOrdemUseCase _useCase;
 
     public ProcessarOrdemUseCaseTests()
     {
         _useCase = new ProcessarOrdemUseCase(
-            _repositorio,
-            new OrdensAceitasFake(),
-            _log,
+            new UnitOfWorkFake(_banco),
+            new RepositorioFake(_banco),
+            new OrdensAceitasFake(_banco),
+            new OutboxFake(_banco),
             new LadoStrategyFactory([new CompraStrategy(), new VendaStrategy()]),
-            new AtivoLocks(),
             new OrderEventNotifier([_observer], NullLogger<OrderEventNotifier>.Instance),
             NullLogger<ProcessarOrdemUseCase>.Instance);
     }
@@ -31,28 +29,29 @@ public class ProcessarOrdemUseCaseTests
         new(id ?? Guid.NewGuid(), Ativo.PETR4, lado, quantidade, preco);
 
     [Fact]
-    public async Task OrdemValida_DeveSerAceita_GravadaNoLog_ESalvaNaMemoria()
+    public async Task OrdemValida_DeveSerAceita_EGravarSaldoEOutboxJuntos()
     {
         var resultado = await _useCase.ExecutarAsync(Ordem(Lado.Compra, 584, 54.87m));
 
         Assert.True(resultado.Sucesso);
         Assert.Equal(32_044.08m, resultado.ExposicaoAtual);
-        Assert.Single(_log.Gravados);
-        Assert.Equal(32_044.08m, _repositorio.Saldos[Ativo.PETR4]);
+        Assert.Equal(32_044.08m, _banco.Saldos[Ativo.PETR4]);
+        Assert.IsType<OrdemAceita>(Assert.Single(_banco.Outbox));
+        Assert.Equal(1, _banco.Commits);
     }
 
     [Fact]
-    public async Task OrdemInvalida_DeveRejeitarComErroDoDominio_SemGravar()
+    public async Task OrdemInvalida_DeveRejeitarSemAbrirTransacao()
     {
         var resultado = await _useCase.ExecutarAsync(Ordem(Lado.Compra, 0, 10m));
 
         Assert.False(resultado.Sucesso);
         Assert.Equal("Ordem.QuantidadeNaoPositiva", resultado.Erro!.Code);
-        Assert.Empty(_log.Gravados);
+        Assert.Equal(0, _banco.Commits);
     }
 
     [Fact]
-    public async Task LimiteExcedido_DeveRejeitarComExposicaoAtual_SemGravarNemSalvar()
+    public async Task LimiteExcedido_DeveRejeitar_SemMudarSaldo_MasAuditarNaOutbox()
     {
         await _useCase.ExecutarAsync(Ordem(Lado.Compra, 10_000, 100m));
 
@@ -61,12 +60,12 @@ public class ProcessarOrdemUseCaseTests
         Assert.False(resultado.Sucesso);
         Assert.Equal("Exposicao.LimiteExcedido", resultado.Erro!.Code);
         Assert.Equal(1_000_000m, resultado.ExposicaoAtual);
-        Assert.Single(_log.Gravados);
-        Assert.Equal(1_000_000m, _repositorio.Saldos[Ativo.PETR4]);
+        Assert.Equal(1_000_000m, _banco.Saldos[Ativo.PETR4]);
+        Assert.IsType<OrdemRejeitada>(_banco.Outbox.Last());
     }
 
     [Fact]
-    public async Task Reenvio_ComMesmoId_DeveResponderIgual_SemContarDuasVezes()
+    public async Task Reenvio_ComMesmoId_DeveResponderIgual_SemGravarNada()
     {
         var id = Guid.NewGuid();
         var primeira = await _useCase.ExecutarAsync(Ordem(Lado.Compra, 100, 10m, id));
@@ -74,29 +73,32 @@ public class ProcessarOrdemUseCaseTests
         var reenvio = await _useCase.ExecutarAsync(Ordem(Lado.Compra, 100, 10m, id));
 
         Assert.Equal(primeira, reenvio);
-        Assert.Single(_log.Gravados);
-        Assert.Equal(1_000m, _repositorio.Saldos[Ativo.PETR4]);
+        Assert.Single(_banco.Outbox);
+        Assert.Equal(1_000m, _banco.Saldos[Ativo.PETR4]);
     }
 
     [Fact]
-    public async Task KafkaForaDoAr_DeveFalharFechado_ComSaldoIntacto()
+    public async Task BancoForaDoAr_DeveFalharFechado_SemGravarNada()
     {
         await _useCase.ExecutarAsync(Ordem(Lado.Compra, 100, 10m));
-        _log.SimularFalha = true;
+        _banco.SimularFalhaNoCommit = true;
 
         var resultado = await _useCase.ExecutarAsync(Ordem(Lado.Compra, 100, 10m));
 
         Assert.False(resultado.Sucesso);
-        Assert.Equal(ProcessarOrdemErrors.LogIndisponivel, resultado.Erro);
+        Assert.Equal(ProcessarOrdemErrors.PersistenciaIndisponivel, resultado.Erro);
         Assert.Equal(1_000m, resultado.ExposicaoAtual);
-        Assert.Equal(1_000m, _repositorio.Saldos[Ativo.PETR4]);
+        Assert.Equal(1_000m, _banco.Saldos[Ativo.PETR4]);
+        Assert.Single(_banco.Outbox);
     }
 
     [Fact]
-    public async Task Observers_DevemReceberAceitasERejeitadas()
+    public async Task Observers_SoRecebemDepoisDoCommit()
     {
         await _useCase.ExecutarAsync(Ordem(Lado.Compra, 10_000, 100m));
         await _useCase.ExecutarAsync(Ordem(Lado.Compra, 1, 1m));
+        _banco.SimularFalhaNoCommit = true;
+        await _useCase.ExecutarAsync(Ordem(Lado.Venda, 1, 1m));
 
         Assert.Collection(_observer.Recebidos,
             e => Assert.IsType<OrdemAceita>(e),
@@ -113,6 +115,6 @@ public class ProcessarOrdemUseCaseTests
         var resultados = await Task.WhenAll(tarefas);
 
         Assert.Equal(10, resultados.Count(r => r.Sucesso));
-        Assert.Equal(1_000_000m, _repositorio.Saldos[Ativo.PETR4]);
+        Assert.Equal(1_000_000m, _banco.Saldos[Ativo.PETR4]);
     }
 }
