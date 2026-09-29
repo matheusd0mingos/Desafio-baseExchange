@@ -2,6 +2,37 @@
 
 Implementação do desafio técnico da Base Exchange para processamento de ordens e controle de exposição financeira por ativo, com validação de regras de negócio, persistência transacional e publicação de eventos.
 
+## Sumário
+
+- [Visão geral](#visão-geral)
+- [Requisitos do desafio](#requisitos-do-desafio)
+- [Como executar](#como-executar)
+  - [Pré-requisitos](#pré-requisitos)
+  - [Opção 1 — Docker Compose](#opção-1--docker-compose)
+  - [Opção 2 — .NET Aspire](#opção-2--net-aspire)
+- [Roteiro de demonstração](#roteiro-de-demonstração)
+- [Arquitetura](#arquitetura)
+  - [Mapa de dependências](#mapa-de-dependências)
+  - [Estrutura da solução](#estrutura-da-solução)
+  - [Fluxo de processamento](#fluxo-de-processamento)
+- [Decisões arquiteturais](#decisões-arquiteturais)
+  - [Clean Architecture](#clean-architecture)
+  - [Domain-Driven Design](#domain-driven-design)
+  - [Strategy Pattern](#strategy-pattern)
+- [Concorrência e consistência](#concorrência-e-consistência)
+- [Idempotência](#idempotência)
+- [Transactional Outbox](#transactional-outbox)
+- [Kafka](#kafka)
+- [PostgreSQL](#postgresql)
+  - [Modelo de dados](#modelo-de-dados)
+- [API](#api-1)
+- [Blazor WebAssembly](#blazor-webassembly)
+- [.NET Aspire](#net-aspire)
+- [Observabilidade](#observabilidade)
+- [Testes](#testes)
+- [Tecnologias](#tecnologias)
+- [Sobre decisões de escopo](#sobre-decisões-de-escopo)
+
 ## Visão geral
 
 O projeto é composto por duas aplicações:
