@@ -7,6 +7,9 @@ namespace OrderGenerator.Services;
 /// <summary>Só leitura: busca exposições, ordens e caixa de saída. Devolve null se a API não responder.</summary>
 public sealed class ConsultasApiClient(HttpClient http)
 {
+    /// <summary>Motivo da última falha, para mostrar na tela.</summary>
+    public string? UltimoErro { get; private set; }
+
     public Task<List<ExposicaoResponse>?> ExposicoesAsync(CancellationToken ct = default) =>
         ObterAsync<List<ExposicaoResponse>>("api/exposicoes", ct);
 
@@ -20,10 +23,14 @@ public sealed class ConsultasApiClient(HttpClient http)
     {
         try
         {
-            return await http.GetFromJsonAsync<T>(url, ct);
+            var resultado = await http.GetFromJsonAsync<T>(url, ct);
+            UltimoErro = null;
+            return resultado;
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or NotSupportedException)
         {
+            UltimoErro = $"{url}: {ex.GetType().Name} - {ex.Message}";
+            Console.Error.WriteLine(UltimoErro); // aparece no F12 → Console
             return null;
         }
     }

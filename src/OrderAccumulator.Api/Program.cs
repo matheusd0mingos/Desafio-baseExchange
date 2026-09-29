@@ -6,6 +6,9 @@ using OrderAccumulator.Infrastructure.Persistence;
 using OrderExposure.Contracts.Responses;
 
 var builder = WebApplication.CreateBuilder(args);
+// Segredos como arquivos (padrão Docker/Kubernetes): cada arquivo vira uma chave de configuração.
+// No Compose, a connection string chega em /run/secrets/ConnectionStrings__orderdb.
+builder.Configuration.AddKeyPerFile("/run/secrets", optional: true);
 
 builder.AddServiceDefaults();
 

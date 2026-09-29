@@ -705,9 +705,11 @@ Na raiz da solução, execute o AppHost:
 dotnet run --project src/OrderExposure.AppHost
 ```
 
-O Aspire irá provisionar e conectar os recursos necessários para o ambiente de desenvolvimento.
+O AppHost sobe Postgres (+ pgAdmin), Kafka (+ Kafka UI), a API, o front e um gateway YARP,
+que faz no desenvolvimento o papel do nginx: `/api/*` vai para a API e o resto para o Blazor.
 
-O dashboard do Aspire disponibiliza a visualização dos recursos, logs, traces e métricas.
+Acesse o front em **http://localhost:5100**. Os demais links ficam no dashboard exibido no terminal.
+A API espera o Postgres, mas não espera o Kafka: ela aceita ordens mesmo com o Kafka fora do ar.
 
 ---
 

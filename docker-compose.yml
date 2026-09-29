@@ -1,21 +1,45 @@
 name: order-exposure
 
 services:
+  # Roda uma vez e termina: sorteia as senhas na primeira execução.
+  secrets-init:
+    image: alpine:3.20
+    volumes:
+      - secrets:/secrets
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ ! -f /secrets/postgres_password ]; then
+          gerar() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24; }
+          PG=$$(gerar)
+          printf '%s' "$$PG" > /secrets/postgres_password
+          printf '%s' "$$(gerar)" > /secrets/pgadmin_password
+          printf 'Host=postgres;Database=orderdb;Username=postgres;Password=%s' "$$PG" > /secrets/ConnectionStrings__orderdb
+          chmod 444 /secrets/*
+          echo "Senhas geradas."
+        fi
+        echo "pgAdmin  -> admin@admin.com / $$(cat /secrets/pgadmin_password)"
+        echo "Postgres -> postgres / $$(cat /secrets/postgres_password)"
+
   postgres:
     image: postgres:17
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: orderdb
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d orderdb"]
       interval: 5s
       timeout: 3s
       retries: 10
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   kafka:
@@ -55,11 +79,14 @@ services:
       - "8080:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      ConnectionStrings__orderdb: "Host=postgres;Database=orderdb;Username=postgres;Password=postgres"
       ConnectionStrings__kafka: "kafka:9092"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
       OTEL_SERVICE_NAME: "order-accumulator-api"
+    volumes:
+      - secrets:/run/secrets:ro
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     restart: unless-stopped
@@ -88,12 +115,18 @@ services:
     image: dpage/pgadmin4
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/pgadmin_password
+    volumes:
+      - secrets:/run/secrets:ro
     ports:
       - "5050:80"
     depends_on:
-      - postgres
+      secrets-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
   pgdata:
+  secrets:
