@@ -6,6 +6,9 @@ using OrderAccumulator.Infrastructure.Observers;
 using OrderAccumulator.Infrastructure.Persistence;
 using OrderAccumulator.Application.Consultas;
 using OrderAccumulator.Infrastructure.Persistence.Consultas;
+using Confluent.Kafka;
+using OrderAccumulator.Infrastructure.Messaging;
+
 
 namespace OrderAccumulator.Infrastructure;
 
@@ -27,6 +30,28 @@ public static class DependencyInjection
 
         services.AddSingleton<IOrderEventObserver, LogOrderObserver>();
 
+        AddMensageiro(services, configuration);
+
         return services;
     }
+
+    private static void AddMensageiro(IServiceCollection services, IConfiguration configuration)
+    {
+        var kafka = configuration.GetConnectionString("kafka");
+
+        // Sem Kafka configurado, a API funciona normalmente: as mensagens só ficam esperando na outbox.
+        if (string.IsNullOrWhiteSpace(kafka))
+            return;
+
+        services.AddSingleton<IProducer<string, string>>(_ => new ProducerBuilder<string, string>(new ProducerConfig
+        {
+            BootstrapServers = kafka,
+            Acks = Acks.All,          // só confirma depois de gravado com segurança
+            EnableIdempotence = true, // retries internos não duplicam mensagem
+            MessageTimeoutMs = 10_000 // Kafka fora: desiste em 10 s e tenta no próximo ciclo
+        }).Build());
+
+        services.AddHostedService<OutboxPublisher>();
+    }
+
 }
