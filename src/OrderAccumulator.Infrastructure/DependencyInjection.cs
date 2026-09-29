@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using OrderAccumulator.Application.Abstractions;
 using OrderAccumulator.Infrastructure.Observers;
 using OrderAccumulator.Infrastructure.Persistence;
+using OrderAccumulator.Application.Consultas;
+using OrderAccumulator.Infrastructure.Persistence.Consultas;
 
 namespace OrderAccumulator.Infrastructure;
 
@@ -21,6 +23,7 @@ public static class DependencyInjection
         services.AddScoped<IExposicaoRepository, EfExposicaoRepository>();
         services.AddScoped<IOrdensAceitas, EfOrdensAceitas>();
         services.AddScoped<IOutbox, EfOutbox>();
+        services.AddScoped<IConsultasOrdens, EfConsultasOrdens>();   
 
         services.AddSingleton<IOrderEventObserver, LogOrderObserver>();
 
