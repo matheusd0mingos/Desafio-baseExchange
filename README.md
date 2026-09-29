@@ -518,7 +518,31 @@ Principais responsabilidades:
 O Entity Framework Core é utilizado como ORM.
 
 ---
+## Modelo de dados
 
+São três tabelas, criadas pelas migrations do EF Core ao subir a API.
+
+```text
+exposicoes                 ordens_aceitas                 outbox
+──────────────────         ────────────────────────       ─────────────────────────
+ativo      PK              ordem_id             PK        id            PK
+valor                      ativo                          tipo
+                           lado                           chave
+                           quantidade                     conteudo      (jsonb)
+                           preco                          criada_em
+                           exposicao_resultante           publicada_em  (null = pendente)
+                           occurred_on
+```
+
+| Tabela | Papel | Decisão |
+| ------ | ----- | ------- |
+| `exposicoes` | O saldo atual de cada ativo | Uma linha por ativo, **criada zerada pela migration**: o `SELECT ... FOR UPDATE` sempre tem uma linha para travar, inclusive na primeira ordem de um ativo |
+| `ordens_aceitas` | Registro das ordens aceitas | A chave primária é o `ordem_id` (a `Idempotency-Key`): é a **garantia final** contra contar a mesma ordem duas vezes |
+| `outbox` | Eventos esperando publicação no Kafka | Índice parcial em `criada_em` **somente das pendentes** (`WHERE publicada_em IS NULL`): o publicador encontra rápido o que falta enviar, sem varrer as já publicadas |
+
+Valores monetários usam `numeric` (decimal exato), nunca ponto flutuante. `Ativo` e `Lado` são gravados como texto (`PETR4`, `Compra`), legíveis no pgAdmin e imunes a uma reordenação do enum no código.
+
+As tabelas do banco são modelos de persistência separados do domínio: o repositório lê a linha e reconstrói o agregado `ExposicaoAtivo`, que nunca conhece o EF Core.
 # API
 
 A API utiliza ASP.NET Core e expõe endpoints REST.
@@ -916,7 +940,6 @@ docker compose start kafka
 4. No **Kafka UI** (http://localhost:8085), as mensagens estão nos tópicos.
 
 ---
-
 
 # Execução dos testes
 
