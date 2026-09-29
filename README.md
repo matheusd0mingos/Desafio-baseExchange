@@ -302,6 +302,59 @@ Por exemplo, é impossível criar um `Quantidade` inválido através da API púb
 
 Isso evita espalhar validações de negócio pela aplicação.
 
+### Modelo do domínio
+
+```mermaid
+classDiagram
+    class ExposicaoAtivo {
+        <<AggregateRoot>>
+        +Ativo Ativo
+        +decimal Valor
+        +Registrar(Ordem, ILadoStrategy) Result~decimal~
+    }
+    class Ordem {
+        <<Entity>>
+        +Guid Id
+        +Ativo Ativo
+        +Lado Lado
+        +decimal ValorFinanceiro
+        +Criar()$ Result~Ordem~
+    }
+    class Preco {
+        <<ValueObject>>
+        +decimal Valor
+    }
+    class Quantidade {
+        <<ValueObject>>
+        +int Valor
+    }
+    class ILadoStrategy {
+        <<interface>>
+        +CalcularImpacto(Ordem) decimal
+    }
+    class CompraStrategy
+    class VendaStrategy
+    class LadoStrategyFactory {
+        +Obter(Lado) ILadoStrategy
+    }
+    class OrdemAceita {
+        <<DomainEvent>>
+    }
+    class OrdemRejeitada {
+        <<DomainEvent>>
+    }
+
+    Ordem *-- Preco
+    Ordem *-- Quantidade
+    ExposicaoAtivo ..> Ordem : registra
+    ExposicaoAtivo ..> ILadoStrategy : pergunta o sinal
+    ILadoStrategy <|.. CompraStrategy
+    ILadoStrategy <|.. VendaStrategy
+    LadoStrategyFactory --> ILadoStrategy : escolhe
+    ExposicaoAtivo ..> OrdemAceita : dispara
+    ExposicaoAtivo ..> OrdemRejeitada : dispara
+```
+
 ---
 
 # Strategy Pattern
@@ -437,6 +490,18 @@ evento pode ser publicado posteriormente
 
 Se o Kafka estiver indisponível, a mensagem permanece na Outbox e será tentada novamente.
 
+### Ciclo de vida de uma mensagem
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pendente: INSERT na mesma transação da ordem
+    Pendente --> Pendente: Kafka fora, nova tentativa em 1 s
+    Pendente --> Publicada: Kafka confirmou (acks=all)
+    Publicada --> [*]
+```
+
+É exatamente o que a tela **Caixa de saída** exibe: ⏳ Pendente → ✅ Publicada.
+
 ---
 
 # Kafka
@@ -512,17 +577,34 @@ O Entity Framework Core é utilizado como ORM.
 
 São três tabelas, criadas pelas migrations do EF Core ao subir a API.
 
-```text
-exposicoes                 ordens_aceitas                 outbox
-──────────────────         ────────────────────────       ─────────────────────────
-ativo      PK              ordem_id             PK        id            PK
-valor                      ativo                          tipo
-                           lado                           chave
-                           quantidade                     conteudo      (jsonb)
-                           preco                          criada_em
-                           exposicao_resultante           publicada_em  (null = pendente)
-                           occurred_on
+```mermaid
+erDiagram
+    exposicoes {
+        varchar ativo PK
+        numeric valor
+    }
+    ordens_aceitas {
+        uuid ordem_id PK
+        varchar ativo
+        varchar lado
+        int quantidade
+        numeric preco
+        numeric exposicao_resultante
+        timestamptz occurred_on
+    }
+    outbox {
+        uuid id PK
+        varchar tipo
+        varchar chave
+        jsonb conteudo
+        timestamptz criada_em
+        timestamptz publicada_em "null = pendente"
+    }
+    exposicoes ||--o{ ordens_aceitas : "mesmo ativo"
+    exposicoes ||--o{ outbox : "chave = ativo"
 ```
+
+As ligações entre as tabelas são lógicas, sem chaves estrangeiras: a Outbox guarda eventos para outros sistemas e não depende da integridade das tabelas de negócio.
 
 | Tabela | Papel | Decisão |
 | ------ | ----- | ------- |
@@ -735,7 +817,7 @@ A primeira execução demora alguns minutos (download das imagens e compilação
 | API              | http://localhost:8080  |
 | Kafka UI         | http://localhost:8085  |
 | Aspire Dashboard | http://localhost:18888 |
-| pgAdmin           | http://localhost:5050  |
+| pgAdmin          | http://localhost:5050  |
 
 ### Senhas
 
@@ -785,47 +867,52 @@ A API espera o PostgreSQL, mas **não** espera o Kafka: ela aceita ordens mesmo 
 
 Uma ordem percorre o seguinte fluxo:
 
-```text
-                    POST /api/ordens
-                         │
-                         ▼
-                   ┌─────────────┐
-                   │     API     │
-                   └──────┬──────┘
-                          │
-                          ▼
-                 ┌─────────────────┐
-                 │ Application     │
-                 │ ProcessarOrdem  │
-                 └────────┬────────┘
-                          │
-                          ▼
-                 ┌─────────────────┐
-                 │ Domain          │
-                 │                 │
-                 │ ExposicaoAtivo  │
-                 │ + Strategy      │
-                 └────────┬────────┘
-                          │
-                       decisão
-                       /       \
-                  aceita       rejeita
-                     │             │
-                     └──────┬──────┘
-                            ▼
-                 ┌─────────────────┐
-                 │ PostgreSQL      │
-                 │                 │
-                 │ Exposição       │
-                 │ Ordem           │
-                 │ Outbox          │
-                 └────────┬────────┘
-                          │ COMMIT
-                          ▼
-                      ┌─────────┐
-                      │  Kafka  │
-                      └─────────┘
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Usuário
+    participant F as Front (Blazor)
+    participant C as OrdensController
+    participant UC as ProcessarOrdemUseCase
+    participant D as Domínio
+    participant DB as PostgreSQL
+    participant P as OutboxPublisher
+    participant K as Kafka
+
+    U->>F: Preenche e clica em Enviar
+    F->>C: POST /api/ordens + Idempotency-Key
+    C->>UC: ExecutarAsync(command)
+    UC->>D: Ordem.Criar() valida preço e quantidade
+    alt dado inválido
+        UC-->>C: Rejeitada, nem abre transação (400)
+    end
+    UC->>DB: BEGIN
+    UC->>DB: SELECT ... FOR UPDATE (trava o ativo)
+    UC->>DB: essa ordem_id já foi aceita?
+    alt reenvio
+        UC-->>C: devolve a resposta original
+    end
+    UC->>D: exposicao.Registrar(ordem, strategy)
+    alt estourou o limite
+        UC->>DB: INSERT outbox (OrdemRejeitada)
+    else cabe no limite
+        UC->>DB: UPDATE exposicoes
+        UC->>DB: INSERT ordens_aceitas
+        UC->>DB: INSERT outbox (OrdemAceita)
+    end
+    UC->>DB: COMMIT (solta a trava)
+    UC-->>C: ProcessarOrdemResult
+    C-->>F: JSON do edital (200 ou 422)
+    F-->>U: Mostra o resultado
+
+    loop a cada 1 segundo
+        P->>DB: pendentes (FOR UPDATE SKIP LOCKED)
+        P->>K: publica e espera o ok (acks=all)
+        P->>DB: marca publicada_em
+    end
 ```
+
+O `loop` do final é independente da requisição: o usuário já recebeu a resposta antes de o evento chegar ao Kafka.
 
 ---
 
