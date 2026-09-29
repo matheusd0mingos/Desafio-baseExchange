@@ -204,10 +204,11 @@ Frontend desenvolvido com **Blazor WebAssembly**, responsável pela interação 
 
 Possui telas para:
 
-* Envio de ordens;
-* Visualização do resultado do processamento;
-* Consulta das exposições;
-* Consulta das ordens processadas.
+* **Nova ordem** — envio de ordens com validação imediata e exibição da resposta da requisição;
+* **Exposição e ordens** — exposição por ativo com barra de uso do limite e últimas ordens aceitas;
+* **Caixa de saída** — eventos da Outbox e seu status de publicação no Kafka.
+
+As telas de consulta se atualizam a cada 3 segundos.
 
 ---
 
@@ -365,9 +366,19 @@ O lock é liberado automaticamente quando a transação termina.
 
 # Idempotência
 
-O `OrderId` é utilizado como identificador idempotente da ordem.
+Cada ordem possui um identificador (`OrderId`), enviado pelo cliente no cabeçalho HTTP `Idempotency-Key`. Assim, o corpo da requisição permanece exatamente como o edital define.
 
-Caso a mesma ordem seja enviada novamente, o sistema consulta as ordens já aceitas antes de modificar a exposição.
+```http
+POST /api/ordens
+Content-Type: application/json
+Idempotency-Key: 11111111-1111-1111-1111-111111111111
+
+{ "ativo": "PETR4", "lado": "C", "quantidade": 584, "preco": 54.87 }
+```
+
+O cabeçalho é opcional: sem ele, o servidor gera um identificador novo (e o reenvio não é protegido). O frontend sempre o envia.
+
+Caso a mesma ordem seja enviada novamente, o sistema consulta as ordens já aceitas, dentro da transação e com a exposição do ativo bloqueada, antes de modificar a exposição. A chave primária da tabela de ordens aceitas é a garantia final contra duplicidade.
 
 Exemplo:
 
@@ -383,7 +394,7 @@ OrderId = ABC
 → retorna o resultado original
 ```
 
-Isso evita que retries de clientes ou intermediários causem duplicidade financeira.
+Isso evita que retries de clientes ou intermediários causem duplicidade financeira. No frontend, quando a API responde `503` ou não responde, o botão **"Tentar novamente"** reenvia a mesma ordem com a mesma chave.
 
 ---
 
@@ -455,6 +466,33 @@ VIIA4
 
 Isso permite que mensagens de um mesmo ativo sejam direcionadas para a mesma partição, preservando a ordem relativa dos eventos daquele ativo dentro da partição.
 
+Tópicos:
+
+| Tópico | Conteúdo |
+| ------ | -------- |
+| `ordens-aceitas` | Ordens aceitas |
+| `ordens-rejeitadas` | Ordens rejeitadas (auditoria) |
+
+As mensagens são **eventos de integração**, separados dos eventos internos do domínio, no mesmo vocabulário do edital (o que entrou + o que foi respondido) e versionados:
+
+```json
+{
+  "versao": 1,
+  "evento": "OrdemAceita",
+  "ordem_id": "d1c1fae0-d55d-4d54-b3ac-01b8fe4ecbb2",
+  "ativo": "PETR4",
+  "lado": "C",
+  "quantidade": 584,
+  "preco": 54.87,
+  "sucesso": true,
+  "exposicao_atual": 32044.08,
+  "msg_erro": null,
+  "ocorrida_em": "2026-09-29T13:44:23.4499606+00:00"
+}
+```
+
+A entrega é *at-least-once*: consumidores devem deduplicar por `ordem_id`.
+
 O producer utiliza:
 
 ```text
@@ -501,7 +539,7 @@ A resposta possui o formato:
 ```json
 {
   "sucesso": true,
-  "exposicao_atual": 31988.08,
+  "exposicao_atual": 32044.08,
   "msg_erro": null
 }
 ```
@@ -511,10 +549,27 @@ Em caso de rejeição:
 ```json
 {
   "sucesso": false,
-  "exposicao_atual": 950000.00,
-  "msg_erro": "Erro aconteceu porque o limite de exposição foi excedido."
+  "exposicao_atual": 32044.08,
+  "msg_erro": "Erro aconteceu porque a ordem levaria a exposição de PETR4 a R$ 100.030.044,09, ultrapassando o limite de R$ 1.000.000,00."
 }
 ```
+
+Todas as respostas, inclusive as de erro, seguem esse formato. O status HTTP indica o tipo de resultado:
+
+| Status | Quando |
+| ------ | ------ |
+| `200`  | Ordem aceita |
+| `400`  | Dado inválido (ativo, lado, quantidade, preço ou JSON malformado) |
+| `422`  | Limite de exposição ultrapassado |
+| `503`  | Banco indisponível: é seguro reenviar com a mesma `Idempotency-Key` |
+
+Endpoints de consulta (somente leitura, sem passar pelo agregado nem travar nada):
+
+| Endpoint | Retorna |
+| -------- | ------- |
+| `GET /api/exposicoes` | Exposição atual e percentual do limite usado, por ativo |
+| `GET /api/ordens?limite=50` | Últimas ordens aceitas (máximo 200) |
+| `GET /api/outbox?limite=50` | Mensagens da Outbox e seu status (`Pendente` / `Publicada`) |
 
 ---
 
@@ -541,11 +596,13 @@ O projeto utiliza **.NET Aspire** para orquestração do ambiente de desenvolvim
 O AppHost declara os recursos necessários:
 
 ```text
-OrderAccumulator API
-        │
-        ├── PostgreSQL
-        └── Kafka
+Gateway (YARP) :5100
+   ├── /api/*  → OrderAccumulator API ──┬── PostgreSQL (+ pgAdmin)
+   │                                    └── Kafka (+ Kafka UI)
+   └── /*      → OrderGenerator (Blazor)
 ```
+
+O gateway YARP faz no desenvolvimento o papel que o nginx faz no Docker Compose: front e API na mesma origem, sem CORS.
 
 Além disso, são disponibilizados:
 
@@ -640,16 +697,11 @@ A maior parte das regras de negócio pode ser testada sem banco de dados ou Kafk
 
 ## Pré-requisitos
 
-Para executar o projeto localmente:
-
-* .NET 10 SDK
-* Docker
-* Docker Compose
-
-Opcionalmente:
-
-* Visual Studio / Rider / VS Code
-* .NET Aspire workload
+| Para | Precisa de |
+| ---- | ---------- |
+| Rodar com Docker Compose | **Somente Docker** (não é preciso ter o .NET instalado) |
+| Rodar com .NET Aspire | .NET 10 SDK, Docker e a [CLI do Aspire](https://aspire.dev) |
+| Rodar os testes | .NET 10 SDK |
 
 ---
 
@@ -658,10 +710,10 @@ Opcionalmente:
 Suba toda a infraestrutura:
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
-Após a inicialização:
+A primeira execução demora alguns minutos (download das imagens e compilação do Blazor). Após a inicialização:
 
 | Serviço          | Endereço               |
 | ---------------- | ---------------------- |
@@ -671,29 +723,25 @@ Após a inicialização:
 | Aspire Dashboard | http://localhost:18888 |
 | pgAdmin          | http://localhost:5050  |
 
-O PostgreSQL fica disponível em:
+### Senhas
 
-```text
-localhost:5432
+Não há senhas no repositório. Na primeira execução, o serviço `secrets-init` gera senhas aleatórias em um volume próprio, e PostgreSQL, pgAdmin e API as leem como arquivos (`*_FILE` e `/run/secrets`). Para ver as credenciais geradas:
+
+```bash
+docker compose logs secrets-init
 ```
 
-Banco:
+No pgAdmin, registre o servidor com host `postgres`, usuário `postgres` e a senha exibida no log. O PostgreSQL não é exposto fora da rede do Compose.
 
-```text
-orderdb
+### Comandos úteis
+
+```bash
+docker compose logs -f api   # acompanhar a API
+docker compose down          # parar, mantendo os dados
+docker compose down -v       # parar e ZERAR tudo (dados e senhas)
 ```
 
-Usuário:
-
-```text
-postgres
-```
-
-Senha:
-
-```text
-postgres
-```
+O banco nasce com os três ativos zerados. Os dados persistem entre reinícios de propósito: uma exposição de risco não pode zerar porque um container reiniciou. Senhas e dados vivem no mesmo ciclo: `down -v` apaga os dois juntos, e a próxima subida gera tudo novo.
 
 ---
 
@@ -705,11 +753,11 @@ Na raiz da solução, execute o AppHost:
 dotnet run --project src/OrderExposure.AppHost
 ```
 
-O AppHost sobe Postgres (+ pgAdmin), Kafka (+ Kafka UI), a API, o front e um gateway YARP,
-que faz no desenvolvimento o papel do nginx: `/api/*` vai para a API e o resto para o Blazor.
+O AppHost sobe PostgreSQL (+ pgAdmin), Kafka (+ Kafka UI), a API, o frontend e o gateway YARP.
 
-Acesse o front em **http://localhost:5100**. Os demais links ficam no dashboard exibido no terminal.
-A API espera o Postgres, mas não espera o Kafka: ela aceita ordens mesmo com o Kafka fora do ar.
+Acesse o frontend **pelo gateway em http://localhost:5100** (não pela URL do recurso `front`, que não repassa as chamadas `/api`). Os demais links ficam no dashboard exibido no terminal.
+
+A API espera o PostgreSQL, mas **não** espera o Kafka: ela aceita ordens mesmo com o Kafka fora do ar.
 
 ---
 
@@ -718,7 +766,7 @@ A API espera o Postgres, mas não espera o Kafka: ela aceita ordens mesmo com o 
 Uma ordem percorre o seguinte fluxo:
 
 ```text
-                    POST /ordens
+                    POST /api/ordens
                          │
                          ▼
                   ┌─────────────┐
@@ -849,41 +897,44 @@ Somente valores que ultrapassam o limite absoluto são rejeitados.
 
 ---
 
-# Possíveis evoluções
+# Roteiro de demonstração
 
-Em um ambiente produtivo, algumas evoluções poderiam ser consideradas:
+Prova ao vivo de que o Kafka fora do ar não derruba o sistema nem perde eventos:
 
-* Autenticação e autorização;
-* Secrets fora do `docker-compose`;
-* Kafka com múltiplos brokers;
-* PostgreSQL com alta disponibilidade;
-* Dead Letter Topic;
-* Retenção e replay de eventos;
-* Outbox Publisher distribuído com métricas de backlog;
-* Testes de integração com containers;
-* Testes de carga e concorrência;
-* CI/CD;
-* Versionamento formal dos eventos;
-* Rate limiting;
-* Resiliência e circuit breakers entre serviços.
+```bash
+docker compose stop kafka
+```
 
-Esses componentes não foram adicionados indiscriminadamente ao desafio para manter o escopo controlado.
+1. Em **Nova ordem**, envie algumas ordens: todas são aceitas normalmente.
+2. Em **Caixa de saída**, os eventos aparecem como ⏳ **Pendente**.
+
+```bash
+docker compose start kafka
+```
+
+3. Em alguns segundos, os eventos passam sozinhos para ✅ **Publicada**.
+4. No **Kafka UI** (http://localhost:8085), as mensagens estão nos tópicos.
 
 ---
+
 
 # Execução dos testes
 
 Execute:
 
 ```bash
-dotnet test
+dotnet test tests/OrderAccumulator.Tests
 ```
+
+Apontar para o projeto de testes compila apenas o necessário. Rodar `dotnet test` na raiz também compila o AppHost, que exige a CLI do Aspire.
 
 Para executar com maior detalhamento:
 
 ```bash
-dotnet test --verbosity normal
+dotnet test tests/OrderAccumulator.Tests --verbosity normal
 ```
+
+Destaque: o teste `OrdensSimultaneas_NaoPodemFurarOLimite` dispara 20 compras de R$ 100.000 ao mesmo tempo, e exatamente 10 são aceitas.
 
 ---
 
