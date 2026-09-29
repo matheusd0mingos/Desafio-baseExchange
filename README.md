@@ -20,7 +20,6 @@ Implementação do desafio técnico da Base Exchange para processamento de orden
   - [Domain-Driven Design](#domain-driven-design)
   - [Strategy Pattern](#strategy-pattern)
 - [Concorrência e consistência](#concorrência-e-consistência)
-- [Idempotência](#idempotência)
 - [Transactional Outbox](#transactional-outbox)
 - [Kafka](#kafka)
 - [PostgreSQL](#postgresql)
@@ -96,16 +95,16 @@ A solução utiliza uma separação em camadas inspirada em **Clean Architecture
                            │      ASP.NET Core    │
                            └──────────┬───────────┘
                                       │
-                    ┌─────────────────┼─────────────────┐
-                    │                 │                 │
-                    ▼                 ▼                 ▼
-              ┌───────────┐    ┌────────────┐    ┌────────────┐
-              │ Application│    │ PostgreSQL │    │   Kafka    │
-              │ + Domain   │    │            │    │            │
-              └───────────┘    └────────────┘    └────────────┘
+                     ┌────────────────┼─────────────────┐
+                     │                │                 │
+                     ▼                ▼                 ▼
+               ┌───────────┐    ┌────────────┐    ┌────────────┐
+               │ Application│    │ PostgreSQL │    │   Kafka    │
+               │ + Domain   │    │            │    │            │
+               └───────────┘    └────────────┘    └────────────┘
                                       ▲
                                       │
-                              Transactional
+                               Transactional
                                   Outbox
 ```
 
@@ -128,28 +127,28 @@ A arquitetura organiza as dependências de forma que o domínio permaneça indep
                  ┌──────────────────────┐
                  │    Application       │
                  │                      │
-                 │ Use Cases             │
-                 │ Interfaces            │
+                 │ Use Cases            │
+                 │ Interfaces           │
                  └──────────┬───────────┘
                             │
                             ▼
                  ┌──────────────────────┐
                  │       Domain         │
                  │                      │
-                 │ Entities              │
-                 │ Value Objects         │
-                 │ Strategies            │
-                 │ Domain Events         │
+                 │ Entities             │
+                 │ Value Objects        │
+                 │ Strategies           │
+                 │ Domain Events        │
                  └──────────────────────┘
                             ▲
                             │ implements
                  ┌──────────┴───────────┐
                  │    Infrastructure    │
                  │                      │
-                 │ PostgreSQL / EF Core  │
-                 │ Kafka                 │
-                 │ Outbox                │
-                 │ Repositories          │
+                 │ PostgreSQL / EF Core │
+                 │ Kafka                │
+                 │ Outbox               │
+                 │ Repositories         │
                  └──────────────────────┘
 ```
 
@@ -205,12 +204,11 @@ Ele coordena:
 1. Validação da ordem;
 2. Abertura da transação;
 3. Bloqueio da exposição do ativo;
-4. Verificação de idempotência;
-5. Execução da regra de negócio;
-6. Persistência;
-7. Registro na Outbox;
-8. Commit da transação;
-9. Notificação de eventos após o commit.
+4. Execução da regra de negócio;
+5. Persistência;
+6. Registro na Outbox;
+7. Commit da transação;
+8. Notificação de eventos após o commit.
 
 ### Infrastructure
 
@@ -376,8 +374,6 @@ BEGIN TRANSACTION
 
     SELECT ... FOR UPDATE
 
-    verificar idempotência
-
     calcular nova exposição
 
     validar limite
@@ -392,40 +388,6 @@ COMMIT
 ```
 
 O lock é liberado automaticamente quando a transação termina.
-
----
-
-# Idempotência
-
-Cada ordem possui um identificador (`OrderId`), enviado pelo cliente no cabeçalho HTTP `Idempotency-Key`. Assim, o corpo da requisição permanece exatamente como o edital define.
-
-```http
-POST /api/ordens
-Content-Type: application/json
-Idempotency-Key: 11111111-1111-1111-1111-111111111111
-
-{ "ativo": "PETR4", "lado": "C", "quantidade": 584, "preco": 54.87 }
-```
-
-O cabeçalho é opcional: sem ele, o servidor gera um identificador novo (e o reenvio não é protegido). O frontend sempre o envia.
-
-Caso a mesma ordem seja enviada novamente, o sistema consulta as ordens já aceitas, dentro da transação e com a exposição do ativo bloqueada, antes de modificar a exposição. A chave primária da tabela de ordens aceitas é a garantia final contra duplicidade.
-
-Exemplo:
-
-```text
-Primeiro envio:
-OrderId = ABC
-Exposição = R$ 500.000
-→ aceita
-
-Segundo envio:
-OrderId = ABC
-→ não altera novamente a exposição
-→ retorna o resultado original
-```
-
-Isso evita que retries de clientes ou intermediários causem duplicidade financeira. No frontend, quando a API responde `503` ou não responde, o botão **"Tentar novamente"** reenvia a mesma ordem com a mesma chave.
 
 ---
 
@@ -445,10 +407,10 @@ PostgreSQL
 │ Ordem aceita                │
 │ Outbox                      │
 └─────────────────────────────┘
-          │
-          │ COMMIT
-          ▼
-     estado persistido
+             │
+             │ COMMIT
+             ▼
+       estado persistido
 ```
 
 Posteriormente, um `BackgroundService` consulta as mensagens pendentes da Outbox e publica no Kafka.
@@ -504,7 +466,7 @@ Tópicos:
 | `ordens-aceitas` | Ordens aceitas |
 | `ordens-rejeitadas` | Ordens rejeitadas (auditoria) |
 
-As mensagens são **eventos de integração**, separados dos eventos internos do domínio, no mesmo vocabulário do edital (o que entrou + o que foi respondido) e versionados:
+As mensagens são **eventos de integração**, separados dos eventos internos do domínio, no mesmo vocabulário do edital e versionados:
 
 ```json
 {
@@ -521,8 +483,6 @@ As mensagens são **eventos de integração**, separados dos eventos internos do
   "ocorrida_em": "2026-09-29T13:44:23.4499606+00:00"
 }
 ```
-
-A entrega é *at-least-once*: consumidores devem deduplicar por `ordem_id`.
 
 O producer utiliza:
 
@@ -548,7 +508,6 @@ Principais responsabilidades:
 
 O Entity Framework Core é utilizado como ORM.
 
----
 ## Modelo de dados
 
 São três tabelas, criadas pelas migrations do EF Core ao subir a API.
@@ -567,13 +526,14 @@ valor                      ativo                          tipo
 
 | Tabela | Papel | Decisão |
 | ------ | ----- | ------- |
-| `exposicoes` | O saldo atual de cada ativo | Uma linha por ativo, **criada zerada pela migration**: o `SELECT ... FOR UPDATE` sempre tem uma linha para travar, inclusive na primeira ordem de um ativo |
-| `ordens_aceitas` | Registro das ordens aceitas | A chave primária é o `ordem_id` (a `Idempotency-Key`): é a **garantia final** contra contar a mesma ordem duas vezes |
-| `outbox` | Eventos esperando publicação no Kafka | Índice parcial em `criada_em` **somente das pendentes** (`WHERE publicada_em IS NULL`): o publicador encontra rápido o que falta enviar, sem varrer as já publicadas |
+| `exposicoes` | O saldo atual de cada ativo | Uma linha por ativo, criada zerada pela migration: o `SELECT ... FOR UPDATE` sempre tem uma linha para travar, inclusive na primeira ordem de um ativo |
+| `ordens_aceitas` | Registro das ordens aceitas | A chave primária é o `ordem_id` |
+| `outbox` | Eventos esperando publicação no Kafka | Índice parcial em `criada_em` somente das pendentes (`WHERE publicada_em IS NULL`) |
 
 Valores monetários usam `numeric` (decimal exato), nunca ponto flutuante. `Ativo` e `Lado` são gravados como texto (`PETR4`, `Compra`), legíveis no pgAdmin e imunes a uma reordenação do enum no código.
 
 As tabelas do banco são modelos de persistência separados do domínio: o repositório lê a linha e reconstrói o agregado `ExposicaoAtivo`, que nunca conhece o EF Core.
+
 # API
 
 A API utiliza ASP.NET Core e expõe endpoints REST.
@@ -609,16 +569,16 @@ Em caso de rejeição:
 }
 ```
 
-Todas as respostas, inclusive as de erro, seguem esse formato. O status HTTP indica o tipo de resultado:
+Todas as respostas, inclusive as de erro, seguem esse formato.
 
 | Status | Quando |
 | ------ | ------ |
 | `200`  | Ordem aceita |
 | `400`  | Dado inválido (ativo, lado, quantidade, preço ou JSON malformado) |
 | `422`  | Limite de exposição ultrapassado |
-| `503`  | Banco indisponível: é seguro reenviar com a mesma `Idempotency-Key` |
+| `503`  | Banco indisponível |
 
-Endpoints de consulta (somente leitura, sem passar pelo agregado nem travar nada):
+Endpoints de consulta:
 
 | Endpoint | Retorna |
 | -------- | ------- |
@@ -722,7 +682,6 @@ São testados principalmente:
 * Processamento de ordens;
 * Aceitação;
 * Rejeição;
-* Idempotência;
 * Comportamento da transação.
 
 A maior parte das regras de negócio pode ser testada sem banco de dados ou Kafka.
@@ -776,7 +735,7 @@ A primeira execução demora alguns minutos (download das imagens e compilação
 | API              | http://localhost:8080  |
 | Kafka UI         | http://localhost:8085  |
 | Aspire Dashboard | http://localhost:18888 |
-| pgAdmin          | http://localhost:5050  |
+| pgAdmin           | http://localhost:5050  |
 
 ### Senhas
 
@@ -796,7 +755,7 @@ docker compose down          # parar, mantendo os dados
 docker compose down -v       # parar e ZERAR tudo (dados e senhas)
 ```
 
-O banco nasce com os três ativos zerados. Os dados persistem entre reinícios de propósito: uma exposição de risco não pode zerar porque um container reiniciou. Senhas e dados vivem no mesmo ciclo: `down -v` apaga os dois juntos, e a próxima subida gera tudo novo.
+O banco nasce com os três ativos zerados. Os dados persistem entre reinícios de propósito: uma exposição não pode zerar porque um container reiniciou.
 
 ---
 
@@ -810,7 +769,13 @@ dotnet run --project src/OrderExposure.AppHost
 
 O AppHost sobe PostgreSQL (+ pgAdmin), Kafka (+ Kafka UI), a API, o frontend e o gateway YARP.
 
-Acesse o frontend **pelo gateway em http://localhost:5100** (não pela URL do recurso `front`, que não repassa as chamadas `/api`). Os demais links ficam no dashboard exibido no terminal.
+Acesse o frontend pelo gateway em:
+
+```text
+http://localhost:5100
+```
+
+Os demais links ficam no dashboard exibido no terminal.
 
 A API espera o PostgreSQL, mas **não** espera o Kafka: ela aceita ordens mesmo com o Kafka fora do ar.
 
@@ -824,42 +789,42 @@ Uma ordem percorre o seguinte fluxo:
                     POST /api/ordens
                          │
                          ▼
-                  ┌─────────────┐
-                  │     API     │
-                  └──────┬──────┘
-                         │
-                         ▼
-                ┌─────────────────┐
-                │ Application     │
-                │ ProcessarOrdem  │
-                └────────┬────────┘
-                         │
-                         ▼
-                ┌─────────────────┐
-                │ Domain          │
-                │                 │
-                │ ExposicaoAtivo  │
-                │ + Strategy      │
-                └────────┬────────┘
-                         │
-                    decisão
-                    /       \
-               aceita       rejeita
-                  │             │
-                  └──────┬──────┘
-                         ▼
-                ┌─────────────────┐
-                │ PostgreSQL      │
-                │                 │
-                │ Exposição       │
-                │ Ordem           │
-                │ Outbox          │
-                └────────┬────────┘
-                         │ COMMIT
-                         ▼
-                    ┌─────────┐
-                    │  Kafka  │
-                    └─────────┘
+                   ┌─────────────┐
+                   │     API     │
+                   └──────┬──────┘
+                          │
+                          ▼
+                 ┌─────────────────┐
+                 │ Application     │
+                 │ ProcessarOrdem  │
+                 └────────┬────────┘
+                          │
+                          ▼
+                 ┌─────────────────┐
+                 │ Domain          │
+                 │                 │
+                 │ ExposicaoAtivo  │
+                 │ + Strategy      │
+                 └────────┬────────┘
+                          │
+                       decisão
+                       /       \
+                  aceita       rejeita
+                     │             │
+                     └──────┬──────┘
+                            ▼
+                 ┌─────────────────┐
+                 │ PostgreSQL      │
+                 │                 │
+                 │ Exposição       │
+                 │ Ordem           │
+                 │ Outbox          │
+                 └────────┬────────┘
+                          │ COMMIT
+                          ▼
+                      ┌─────────┐
+                      │  Kafka  │
+                      └─────────┘
 ```
 
 ---
@@ -874,7 +839,6 @@ A implementação procura aplicar os seguintes princípios:
 * **Domain-Driven Design**
 * **Clean Architecture**
 * **Fail-safe persistence**
-* **Idempotência**
 * **Consistência transacional**
 * **Observabilidade**
 * **Testabilidade**
