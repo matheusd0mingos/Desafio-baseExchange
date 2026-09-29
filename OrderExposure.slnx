@@ -1,7 +1,4 @@
 <Solution>
-  <Folder Name="/OrderAccumulator.Applcation/">
-    <Project Path="OrderAccumulator.Applcation/OrderAccumulator.Application.csproj" />
-  </Folder>
   <Folder Name="/src/">
     <Project Path="src/OrderAccumulator.Api/OrderAccumulator.Api.csproj" />
     <Project Path="src/OrderAccumulator.Application/OrderAccumulator.Application.csproj" />
@@ -15,5 +12,4 @@
   <Folder Name="/tests/">
     <Project Path="tests/OrderAccumulator.Tests/OrderAccumulator.Tests.csproj" />
   </Folder>
-  <Project Path="OrderAccumulator.Infrastructure/OrderAccumulator.Infrastructure.csproj" />
 </Solution>
