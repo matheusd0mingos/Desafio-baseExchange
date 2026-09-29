@@ -1,0 +1,117 @@
+@page "/exposicoes"
+@implements IAsyncDisposable
+@using OrderExposure.Contracts.Responses
+@using OrderGenerator.Services
+@inject ConsultasApiClient Consultas
+
+<PageTitle>Exposição e ordens</PageTitle>
+
+<div class="d-flex justify-content-between align-items-baseline mb-4">
+    <h1>Exposição e ordens</h1>
+    <small class="text-muted">Atualiza a cada 3 s · última: @_ultimaAtualizacao</small>
+</div>
+
+@if (_semConexao)
+{
+    <div class="alert alert-warning">Não foi possível falar com a API. Tentando de novo...</div>
+}
+
+<div class="row g-3 mb-5">
+    @foreach (var exposicao in _exposicoes)
+    {
+        <div class="col-md-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">@exposicao.Ativo</h5>
+                    <p class="fs-4 mb-2">@Formatacao.Moeda(exposicao.ExposicaoAtual)</p>
+                    <div class="progress" role="progressbar" aria-label="Uso do limite de @exposicao.Ativo">
+                        <div class="progress-bar @CorDaBarra(exposicao.PercentualDoLimite)"
+                             style="width: @Formatacao.Css(exposicao.PercentualDoLimite)%"></div>
+                    </div>
+                    <small class="text-muted">
+                        @Formatacao.Percentual(exposicao.PercentualDoLimite) do limite de @Formatacao.Moeda(exposicao.Limite)
+                    </small>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<h4>Ordens aceitas</h4>
+@if (_ordens.Count == 0)
+{
+    <p class="text-muted">Nenhuma ordem aceita ainda.</p>
+}
+else
+{
+    <table class="table table-sm align-middle">
+        <thead>
+            <tr><th>Hora</th><th>Ordem</th><th class="text-end">Exposição resultante</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var ordem in _ordens)
+            {
+                <tr>
+                    <td>@Formatacao.Hora(ordem.OcorridaEm)</td>
+                    <td>@Formatacao.Lado(ordem.Lado) @ordem.Quantidade @ordem.Ativo a @Formatacao.Moeda(ordem.Preco)</td>
+                    <td class="text-end">@Formatacao.Moeda(ordem.ExposicaoResultante)</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private readonly CancellationTokenSource _parar = new();
+    private List<ExposicaoResponse> _exposicoes = [];
+    private List<OrdemAceitaResponse> _ordens = [];
+    private bool _semConexao;
+    private string _ultimaAtualizacao = "-";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CarregarAsync();
+        _ = AtualizarPeriodicamenteAsync();
+    }
+
+    private async Task AtualizarPeriodicamenteAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_parar.Token))
+            {
+                await CarregarAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Saiu da tela: o timer para.
+        }
+    }
+
+    private async Task CarregarAsync()
+    {
+        var exposicoes = await Consultas.ExposicoesAsync(_parar.Token);
+        var ordens = await Consultas.OrdensAsync(ct: _parar.Token);
+
+        _semConexao = exposicoes is null || ordens is null;
+        _exposicoes = exposicoes ?? _exposicoes;
+        _ordens = ordens ?? _ordens;
+        _ultimaAtualizacao = DateTime.Now.ToString("HH:mm:ss");
+    }
+
+    private static string CorDaBarra(decimal percentual) => percentual switch
+    {
+        < 50 => "bg-success",
+        < 80 => "bg-warning",
+        _ => "bg-danger"
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        await _parar.CancelAsync();
+        _parar.Dispose();
+    }
+}

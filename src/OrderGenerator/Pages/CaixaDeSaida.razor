@@ -1,0 +1,120 @@
+@page "/caixa-de-saida"
+@implements IAsyncDisposable
+@using OrderExposure.Contracts.Responses
+@using OrderGenerator.Services
+@inject ConsultasApiClient Consultas
+
+<PageTitle>Caixa de saída</PageTitle>
+
+<div class="d-flex justify-content-between align-items-baseline mb-3">
+    <h1>Caixa de saída</h1>
+    <small class="text-muted">Atualiza a cada 3 s · última: @_ultimaAtualizacao</small>
+</div>
+
+<div class="alert alert-light border">
+    Todo evento nasce aqui, <strong>na mesma transação da ordem</strong>.
+    Depois, o mensageiro leva cada um ao Kafka e marca como publicado.
+    Se o Kafka estiver fora, os eventos ficam <strong>esperando, sem se perder</strong>.
+</div>
+
+@if (_semConexao)
+{
+    <div class="alert alert-warning">Não foi possível falar com a API. Tentando de novo...</div>
+}
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="card text-center"><div class="card-body">
+            <div class="fs-3">⏳ @_mensagens.Count(m => m.PublicadaEm is null)</div>
+            <small class="text-muted">Pendentes</small>
+        </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center"><div class="card-body">
+            <div class="fs-3">✅ @_mensagens.Count(m => m.PublicadaEm is not null)</div>
+            <small class="text-muted">Publicadas no Kafka</small>
+        </div></div>
+    </div>
+</div>
+
+@if (_mensagens.Count == 0)
+{
+    <p class="text-muted">A caixa está vazia. Envie uma ordem para ver o evento nascer aqui.</p>
+}
+else
+{
+    <table class="table table-sm align-middle">
+        <thead>
+            <tr><th>Criada</th><th>Evento</th><th>Ativo</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var mensagem in _mensagens)
+            {
+                <tr>
+                    <td>@Formatacao.Hora(mensagem.CriadaEm)</td>
+                    <td>
+                        <span class="badge @(mensagem.Tipo == "OrdemAceita" ? "text-bg-success" : "text-bg-danger")">
+                            @mensagem.Tipo
+                        </span>
+                    </td>
+                    <td>@mensagem.Ativo</td>
+                    <td>
+                        @if (mensagem.PublicadaEm is { } publicadaEm)
+                        {
+                            <span>✅ Publicada às @Formatacao.Hora(publicadaEm)</span>
+                        }
+                        else
+                        {
+                            <span>⏳ Pendente</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private readonly CancellationTokenSource _parar = new();
+    private List<MensagemOutboxResponse> _mensagens = [];
+    private bool _semConexao;
+    private string _ultimaAtualizacao = "-";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CarregarAsync();
+        _ = AtualizarPeriodicamenteAsync();
+    }
+
+    private async Task AtualizarPeriodicamenteAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_parar.Token))
+            {
+                await CarregarAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Saiu da tela: o timer para.
+        }
+    }
+
+    private async Task CarregarAsync()
+    {
+        var mensagens = await Consultas.OutboxAsync(ct: _parar.Token);
+
+        _semConexao = mensagens is null;
+        _mensagens = mensagens ?? _mensagens;
+        _ultimaAtualizacao = DateTime.Now.ToString("HH:mm:ss");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _parar.CancelAsync();
+        _parar.Dispose();
+    }
+}
