@@ -1,7 +1,9 @@
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OrderAccumulator.Application;
 using OrderAccumulator.Infrastructure;
 using OrderAccumulator.Infrastructure.Persistence;
+using OrderExposure.Contracts.Responses;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,7 +11,11 @@ builder.AddServiceDefaults();
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .ConfigureApiBehaviorOptions(options =>
+        // JSON malformado ou campo faltando também responde no formato do edital
+        options.InvalidModelStateResponseFactory = _ => new BadRequestObjectResult(
+            new OrdemResponse(false, 0m, "Erro aconteceu porque o JSON enviado é inválido ou está incompleto.")));
 builder.Services.AddOpenApi();
 
 var app = builder.Build();

@@ -1,6 +1,27 @@
-@OrderAccumulator.Api_HostAddress = http://localhost:5066
+@api = http://localhost:5000
 
-GET {{OrderAccumulator.Api_HostAddress}}/weatherforecast/
-Accept: application/json
+### Compra válida (com chave de idempotência)
+POST {{api}}/api/ordens
+Content-Type: application/json
+Idempotency-Key: 11111111-1111-1111-1111-111111111111
 
-###
+{ "ativo": "PETR4", "lado": "C", "quantidade": 584, "preco": 54.87 }
+
+### Reenvio da MESMA ordem (não pode contar duas vezes)
+POST {{api}}/api/ordens
+Content-Type: application/json
+Idempotency-Key: 11111111-1111-1111-1111-111111111111
+
+{ "ativo": "PETR4", "lado": "C", "quantidade": 584, "preco": 54.87 }
+
+### Estoura o limite
+POST {{api}}/api/ordens
+Content-Type: application/json
+
+{ "ativo": "PETR4", "lado": "C", "quantidade": 99999, "preco": 999.99 }
+
+### Preço fora do tick
+POST {{api}}/api/ordens
+Content-Type: application/json
+
+{ "ativo": "PETR4", "lado": "V", "quantidade": 1, "preco": 54.875 }
