@@ -35,6 +35,17 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  front:
+    build:
+      context: .
+      dockerfile: src/OrderGenerator/Dockerfile
+    image: order-generator
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
     environment:

@@ -1,7 +1,133 @@
 ﻿@page "/"
+@using System.Globalization
+@using OrderExposure.Contracts.Requests
+@using OrderGenerator.Formularios
+@using OrderGenerator.Services
+@inject OrdemApiClient Api
 
-<PageTitle>Home</PageTitle>
+<PageTitle>OrderGenerator</PageTitle>
 
-<h1>Hello, world!</h1>
+<h1 class="mb-4">Nova ordem</h1>
 
-Welcome to your new app.
+<div class="row g-4">
+    <div class="col-md-5">
+        <EditForm Model="_formulario" OnValidSubmit="EnviarFormularioAsync">
+            <DataAnnotationsValidator />
+
+            <div class="mb-3">
+                <label class="form-label" for="ativo">Ativo</label>
+                <InputSelect id="ativo" class="form-select" @bind-Value="_formulario.Ativo">
+                    @foreach (var ativo in Ativos)
+                    {
+                        <option value="@ativo">@ativo</option>
+                    }
+                </InputSelect>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label d-block">Lado</label>
+                <InputRadioGroup @bind-Value="_formulario.Lado">
+                    <div class="form-check form-check-inline">
+                        <InputRadio id="compra" class="form-check-input" Value="@("C")" />
+                        <label class="form-check-label" for="compra">Compra</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <InputRadio id="venda" class="form-check-input" Value="@("V")" />
+                        <label class="form-check-label" for="venda">Venda</label>
+                    </div>
+                </InputRadioGroup>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label" for="quantidade">Quantidade</label>
+                <InputNumber id="quantidade" class="form-control" @bind-Value="_formulario.Quantidade" />
+                <ValidationMessage For="() => _formulario.Quantidade" class="text-danger small" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label" for="preco">Preço (R$)</label>
+                <InputNumber id="preco" class="form-control" step="0.01" @bind-Value="_formulario.Preco" />
+                <ValidationMessage For="() => _formulario.Preco" class="text-danger small" />
+            </div>
+
+            <button type="submit" class="btn btn-primary w-100" disabled="@_enviando">
+                @(_enviando ? "Enviando..." : "Enviar ordem")
+            </button>
+        </EditForm>
+    </div>
+
+    <div class="col-md-7">
+        @if (_ultimo is not null)
+        {
+            var resposta = _ultimo.Resposta;
+            <div class="alert @(resposta.Sucesso ? "alert-success" : "alert-danger")">
+                <h5 class="alert-heading">@(resposta.Sucesso ? "✅ Sucesso" : "❌ Erro")</h5>
+                <p class="mb-1">Exposição atual: <strong>@Moeda(resposta.ExposicaoAtual)</strong></p>
+                @if (resposta.MsgErro is not null)
+                {
+                    <p class="mb-0">@resposta.MsgErro</p>
+                }
+                @if (_ultimo.PodeTentarDeNovo)
+                {
+                    <button class="btn btn-outline-danger btn-sm mt-2" @onclick="TentarNovamenteAsync" disabled="@_enviando">
+                        Tentar novamente (mesma ordem, sem duplicar)
+                    </button>
+                }
+            </div>
+        }
+
+        @if (_historico.Count > 0)
+        {
+            <h5 class="mt-4">Últimos envios</h5>
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr><th>Hora</th><th>Ordem</th><th>Resultado</th><th>Exposição</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var envio in _historico)
+                    {
+                        <tr>
+                            <td>@envio.Hora.ToString("HH:mm:ss")</td>
+                            <td>@(envio.Request.Lado == "C" ? "Compra" : "Venda") @envio.Request.Quantidade @envio.Request.Ativo a @Moeda(envio.Request.Preco)</td>
+                            <td>@(envio.Resultado.Resposta.Sucesso ? "✅" : "❌") <small class="text-muted">HTTP @envio.Resultado.StatusHttp</small></td>
+                            <td>@Moeda(envio.Resultado.Resposta.ExposicaoAtual)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+@code {
+    private static readonly string[] Ativos = ["PETR4", "VALE3", "VIIA4"];
+    private static readonly CultureInfo PtBr = CultureInfo.GetCultureInfo("pt-BR");
+
+    private readonly OrdemFormulario _formulario = new();
+    private readonly List<Envio> _historico = [];
+    private ResultadoEnvio? _ultimo;
+    private (NovaOrdemRequest Request, Guid Chave)? _ultimaTentativa;
+    private bool _enviando;
+
+    // Ordem nova = chave nova.
+    private Task EnviarFormularioAsync() => EnviarAsync(_formulario.ParaRequest(), Guid.NewGuid());
+
+    // Tentar de novo = MESMA chave: se a primeira chegou a gravar, o servidor não conta duas vezes.
+    private Task TentarNovamenteAsync() =>
+        _ultimaTentativa is { } tentativa ? EnviarAsync(tentativa.Request, tentativa.Chave) : Task.CompletedTask;
+
+    private async Task EnviarAsync(NovaOrdemRequest request, Guid chave)
+    {
+        _enviando = true;
+        _ultimaTentativa = (request, chave);
+
+        _ultimo = await Api.EnviarAsync(request, chave);
+        _historico.Insert(0, new Envio(DateTime.Now, request, _ultimo));
+
+        _enviando = false;
+    }
+
+    private static string Moeda(decimal valor) => valor.ToString("C", PtBr);
+
+    private sealed record Envio(DateTime Hora, NovaOrdemRequest Request, ResultadoEnvio Resultado);
+}
