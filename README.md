@@ -9,6 +9,7 @@ O projeto é composto por duas aplicações:
 * **OrderGenerator** — aplicação web responsável pela entrada das ordens e apresentação do resultado ao usuário.
 * **OrderAccumulator** — API responsável por validar, processar e persistir as ordens, mantendo a exposição financeira de cada ativo dentro do limite definido.
 
+Para garantir consistência sob concorrência, a atualização da exposição é realizada de forma transacional no PostgreSQL utilizando bloqueio pessimista da linha (`SELECT ... FOR UPDATE`).
 
 Os eventos resultantes do processamento são registrados em uma **Transactional Outbox** e posteriormente publicados no **Apache Kafka**, evitando inconsistências entre a transação do banco de dados e a publicação de mensagens.
 
@@ -50,6 +51,8 @@ Quando uma ordem é rejeitada, nenhuma alteração de exposição é persistida.
 
 A solução utiliza uma separação em camadas inspirada em **Clean Architecture**, com o domínio isolado dos detalhes de infraestrutura.
 
+## Visão geral
+
 ```text
                            ┌──────────────────────┐
                            │    OrderGenerator    │
@@ -74,6 +77,52 @@ A solução utiliza uma separação em camadas inspirada em **Clean Architecture
                               Transactional
                                   Outbox
 ```
+
+## Mapa de dependências
+
+A arquitetura organiza as dependências de forma que o domínio permaneça independente dos detalhes de infraestrutura.
+
+```text
+                 ┌──────────────────────┐
+                 │   OrderGenerator     │
+                 │  Blazor WebAssembly  │
+                 └──────────┬───────────┘
+                            │ HTTP
+                            ▼
+                 ┌──────────────────────┐
+                 │         API          │
+                 └──────────┬───────────┘
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │    Application       │
+                 │                      │
+                 │ Use Cases             │
+                 │ Interfaces            │
+                 └──────────┬───────────┘
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │       Domain         │
+                 │                      │
+                 │ Entities              │
+                 │ Value Objects         │
+                 │ Strategies            │
+                 │ Domain Events         │
+                 └──────────────────────┘
+                            ▲
+                            │ implements
+                 ┌──────────┴───────────┐
+                 │    Infrastructure    │
+                 │                      │
+                 │ PostgreSQL / EF Core  │
+                 │ Kafka                 │
+                 │ Outbox                │
+                 │ Repositories          │
+                 └──────────────────────┘
+```
+
+**Regra de dependência:** o domínio não conhece detalhes de infraestrutura. As implementações de persistência e mensageria dependem das abstrações definidas pelas camadas internas.
 
 ## Estrutura da solução
 
