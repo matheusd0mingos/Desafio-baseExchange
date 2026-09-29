@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OrderAccumulator.Application\OrderAccumulator.Application.csproj" />
+    <ProjectReference Include="..\OrderExposure.Contracts\OrderExposure.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
