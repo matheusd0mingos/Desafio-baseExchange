@@ -1,4 +1,4 @@
-@api = http://localhost:5000
+@api = http://localhost:8080
 
 ### Compra válida (com chave de idempotência)
 POST {{api}}/api/ordens
