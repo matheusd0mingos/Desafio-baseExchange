@@ -1,22 +1,30 @@
+using Microsoft.EntityFrameworkCore;
+using OrderAccumulator.Application;
+using OrderAccumulator.Infrastructure;
+using OrderAccumulator.Infrastructure.Persistence;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+builder.AddServiceDefaults();
 
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddControllers();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+// Cria/atualiza as tabelas ao subir (desafio: simples e reproduzível).
+using (var scope = app.Services.CreateScope())
 {
-    app.MapOpenApi();
+    var db = scope.ServiceProvider.GetRequiredService<OrderAccumulatorDbContext>();
+    await db.Database.MigrateAsync();
 }
 
-app.UseHttpsRedirection();
+app.MapDefaultEndpoints();
 
-app.UseAuthorization();
+if (app.Environment.IsDevelopment())
+    app.MapOpenApi();
 
 app.MapControllers();
 
