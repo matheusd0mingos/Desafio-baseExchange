@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\OrderAccumulator.Domain\OrderAccumulator.Domain.csproj" />
     <ProjectReference Include="..\..\src\OrderAccumulator.Application\OrderAccumulator.Application.csproj" />
     <ProjectReference Include="..\..\src\OrderExposure.Contracts\OrderExposure.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\OrderAccumulator.Infrastructure\OrderAccumulator.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
