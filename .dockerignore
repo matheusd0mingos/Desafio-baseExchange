@@ -1,6 +1,4 @@
-@'
 **/bin/
 **/obj/
 **/.vs/
 .git/
-'@ | Set-Content .dockerignore
