@@ -2,6 +2,10 @@
 
 Implementação do desafio técnico da Base Exchange para processamento de ordens e controle de exposição financeira por ativo, com validação de regras de negócio, persistência transacional e publicação de eventos.
 
+> **Resumo rápido:** o OrderAccumulator valida cada ordem e mantém a exposição de cada ativo dentro do limite de R$ 1.000.000, mesmo com ordens simultâneas. Os eventos vão ao Kafka pelo padrão **Transactional Outbox**: o Kafka fora do ar não impede a aceitação de ordens nem perde eventos.
+>
+> **Para rodar:** `docker compose up --build -d` e abra http://localhost:3000 (só precisa de Docker).
+
 ## Sumário
 
 - [Visão geral](#visão-geral)
@@ -971,7 +975,6 @@ O `loop` do final é independente da requisição: o usuário já recebeu a resp
 
 ---
 
-
 # Estrutura de infraestrutura
 
 O ambiente Docker possui:
@@ -1003,7 +1006,8 @@ O ambiente Docker possui:
 
 Algumas decisões foram tomadas pensando na confiabilidade do processamento financeiro:
 
-### PostgreSQL como primeira barreira
+### PostgreSQL como fonte da verdade
+
 A exposição não é mantida apenas em memória. O estado persistido no PostgreSQL permite recuperação após reinício da aplicação.
 
 ### Kafka desacoplado do processamento síncrono
