@@ -43,7 +43,7 @@ services:
     restart: unless-stopped
 
   kafka:
-    image: apache/kafka:latest
+    image: apache/kafka:4.3.1
     environment:
       CLUSTER_ID: "order-exposure-local-01"
       KAFKA_NODE_ID: 1
@@ -60,12 +60,12 @@ services:
     restart: unless-stopped
 
   kafka-ui:
-    image: kafbat/kafka-ui:latest
+    image: kafbat/kafka-ui:v1.5.0
     environment:
       KAFKA_CLUSTERS_0_NAME: order-exposure
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     ports:
-      - "8085:8080"
+      - "127.0.0.1:8085:8080"
     depends_on:
       - kafka
     restart: unless-stopped
@@ -76,7 +76,7 @@ services:
       dockerfile: src/OrderAccumulator.Api/Dockerfile
     image: order-accumulator-api
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__kafka: "kafka:9092"
@@ -97,29 +97,29 @@ services:
       dockerfile: src/OrderGenerator/Dockerfile
     image: order-generator
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"
     depends_on:
       - api
     restart: unless-stopped
 
   aspire-dashboard:
-    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:13.5
     environment:
       ASPIRE_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
       DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
     ports:
-      - "18888:18888"
+      - "127.0.0.1:18888:18888"
     restart: unless-stopped
 
   pgadmin:
-    image: dpage/pgadmin4
+    image: dpage/pgadmin4:9.18
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/pgadmin_password
     volumes:
       - secrets:/run/secrets:ro
     ports:
-      - "5050:80"
+      - "127.0.0.1:5050:80"
     depends_on:
       secrets-init:
         condition: service_completed_successfully

@@ -39,6 +39,19 @@ public class ProcessarOrdemUseCaseTests
         Assert.IsType<OrdemAceita>(Assert.Single(_banco.Outbox));
         Assert.Equal(1, _banco.Commits);
     }
+    [Fact]
+    public async Task MesmaChave_ComOrdemDiferente_DeveSerRecusada()
+    {
+        var id = Guid.NewGuid();
+        await _useCase.ExecutarAsync(Ordem(Lado.Compra, 100, 10m, id));
+
+        var resultado = await _useCase.ExecutarAsync(Ordem(Lado.Compra, 100, 99m, id));
+
+        Assert.False(resultado.Sucesso);
+        Assert.Equal(ProcessarOrdemErrors.ChaveReutilizada, resultado.Erro);
+        Assert.Equal(1_000m, resultado.ExposicaoAtual);
+        Assert.Single(_banco.Outbox);
+    }
 
     [Fact]
     public async Task OrdemInvalida_DeveRejeitarSemAbrirTransacao()

@@ -47,8 +47,17 @@ public sealed class ProcessarOrdemUseCase(
             // 4. Idempotência: reenvio devolve a resposta original, sem gravar nada
             var jaAceita = await ordensAceitas.ObterAsync(ordem.Id, ct);
             if (jaAceita is not null)
-                return (ProcessarOrdemResult.Aceita(jaAceita.ExposicaoResultante), []);
+            {
+                // Mesma chave com conteúdo diferente não é reenvio: é erro do cliente.
+                var mesmaOrdem = jaAceita.Ativo == ordem.Ativo
+                    && jaAceita.Lado == ordem.Lado
+                    && jaAceita.Quantidade == ordem.Quantidade.Valor
+                    && jaAceita.Preco == ordem.Preco.Valor;
 
+                return mesmaOrdem
+                    ? (ProcessarOrdemResult.Aceita(jaAceita.ExposicaoResultante), [])
+                    : (ProcessarOrdemResult.Rejeitada(exposicaoConhecida, ProcessarOrdemErrors.ChaveReutilizada), []);
+            }
             // 5. Decisão do domínio
             var decisao = exposicao.Registrar(ordem, estrategias.Obter(ordem.Lado));
             IDomainEvent[] eventos = [.. exposicao.DomainEvents];
