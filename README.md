@@ -971,23 +971,6 @@ O `loop` do final é independente da requisição: o usuário já recebeu a resp
 
 ---
 
-# Princípios utilizados
-
-A implementação procura aplicar os seguintes princípios:
-
-* **Separation of Concerns**
-* **Dependency Inversion**
-* **Single Responsibility**
-* **Domain-Driven Design**
-* **Clean Architecture**
-* **Fail-safe persistence**
-* **Consistência transacional**
-* **Observabilidade**
-* **Testabilidade**
-
-A complexidade adicional de PostgreSQL + Kafka + Outbox foi utilizada especificamente para tratar problemas de consistência, concorrência e confiabilidade de publicação, em vez de utilizar mensageria apenas como requisito arquitetural.
-
----
 
 # Estrutura de infraestrutura
 
@@ -1020,8 +1003,7 @@ O ambiente Docker possui:
 
 Algumas decisões foram tomadas pensando na confiabilidade do processamento financeiro:
 
-### PostgreSQL como fonte da verdade
-
+### PostgreSQL como primeira barreira
 A exposição não é mantida apenas em memória. O estado persistido no PostgreSQL permite recuperação após reinício da aplicação.
 
 ### Kafka desacoplado do processamento síncrono
