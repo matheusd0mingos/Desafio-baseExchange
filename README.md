@@ -17,6 +17,7 @@ Implementação do desafio técnico da Base Exchange para processamento de orden
   - [Fluxo de processamento](#fluxo-de-processamento)
 - [Decisões arquiteturais](#decisões-arquiteturais)
   - [Clean Architecture](#clean-architecture)
+  - [Portas e adaptadores](#portas-e-adaptadores)
   - [Domain-Driven Design](#domain-driven-design)
   - [Strategy Pattern](#strategy-pattern)
 - [Concorrência e consistência](#concorrência-e-consistência)
@@ -81,76 +82,67 @@ Quando uma ordem é rejeitada, nenhuma alteração de exposição é persistida.
 
 A solução utiliza uma separação em camadas inspirada em **Clean Architecture**, com o domínio isolado dos detalhes de infraestrutura.
 
-## Visão geral
-
-```text
-                           ┌──────────────────────┐
-                           │    OrderGenerator    │
-                           │   Blazor WebAssembly │
-                           └──────────┬───────────┘
-                                      │ HTTP / JSON
-                                      ▼
-                           ┌──────────────────────┐
-                           │  OrderAccumulator    │
-                           │      ASP.NET Core    │
-                           └──────────┬───────────┘
-                                      │
-                     ┌────────────────┼─────────────────┐
-                     │                │                 │
-                     ▼                ▼                 ▼
-               ┌───────────┐    ┌────────────┐    ┌────────────┐
-               │ Application│    │ PostgreSQL │    │   Kafka    │
-               │ + Domain   │    │            │    │            │
-               └───────────┘    └────────────┘    └────────────┘
-                                      ▲
-                                      │
-                               Transactional
-                                  Outbox
-```
-
 ## Mapa de dependências
 
 A arquitetura organiza as dependências de forma que o domínio permaneça independente dos detalhes de infraestrutura.
 
-```text
-                 ┌──────────────────────┐
-                 │   OrderGenerator     │
-                 │  Blazor WebAssembly  │
-                 └──────────┬───────────┘
-                            │ HTTP
-                            ▼
-                 ┌──────────────────────┐
-                 │         API          │
-                 └──────────┬───────────┘
-                            │
-                            ▼
-                 ┌──────────────────────┐
-                 │    Application       │
-                 │                      │
-                 │ Use Cases            │
-                 │ Interfaces           │
-                 └──────────┬───────────┘
-                            │
-                            ▼
-                 ┌──────────────────────┐
-                 │       Domain         │
-                 │                      │
-                 │ Entities             │
-                 │ Value Objects        │
-                 │ Strategies           │
-                 │ Domain Events        │
-                 └──────────────────────┘
-                            ▲
-                            │ implements
-                 ┌──────────┴───────────┐
-                 │    Infrastructure    │
-                 │                      │
-                 │ PostgreSQL / EF Core │
-                 │ Kafka                │
-                 │ Outbox               │
-                 │ Repositories         │
-                 └──────────────────────┘
+```mermaid
+flowchart LR
+    subgraph CONTRACTS["📄 Contracts"]
+        direction TB
+        NovaOrdemRequest["NovaOrdemRequest"]
+        OrdemResponse["OrdemResponse"]
+        ConsultaResponses["Responses de consulta"]
+    end
+
+    subgraph API["🌐 API"]
+        direction TB
+        OrdensController["OrdensController<br/>POST /api/ordens"]
+        ConsultasController["ConsultasController<br/>GET /api/..."]
+        OrdemMapeamento["OrdemMapeamento<br/>JSON ⇄ Command"]
+    end
+
+    subgraph APP["⚙️ Application"]
+        direction TB
+        ProcessarOrdemUseCase["ProcessarOrdemUseCase"]
+        OrderEventNotifier["OrderEventNotifier"]
+        Portas(["IUnitOfWork · IExposicaoRepository<br/>IOrdensAceitas · IOutbox"])
+        IOrderEventObserver(["IOrderEventObserver"])
+        IConsultasOrdens(["IConsultasOrdens"])
+    end
+
+    subgraph DOMAIN["💎 Domain"]
+        direction TB
+        Ordem["Ordem «Entity»<br/>Preco · Quantidade «VO»"]
+        ExposicaoAtivo["ExposicaoAtivo<br/>«AggregateRoot»"]
+        ILadoStrategyFactory(["ILadoStrategyFactory"])
+        ILadoStrategy(["ILadoStrategy<br/>Compra · Venda"])
+        Eventos["OrdemAceita · OrdemRejeitada<br/>«DomainEvent»"]
+    end
+
+    OrdensController --> OrdemMapeamento
+    OrdemMapeamento --> NovaOrdemRequest
+    OrdemMapeamento --> OrdemResponse
+    ConsultasController --> ConsultaResponses
+    OrdensController --> ProcessarOrdemUseCase
+    ConsultasController --> IConsultasOrdens
+
+    ProcessarOrdemUseCase --> Portas
+    ProcessarOrdemUseCase --> OrderEventNotifier
+    OrderEventNotifier --> IOrderEventObserver
+
+    ProcessarOrdemUseCase -->|1. valida| Ordem
+    ProcessarOrdemUseCase -->|2. escolhe o lado| ILadoStrategyFactory
+    ProcessarOrdemUseCase -->|3. decide| ExposicaoAtivo
+    ILadoStrategyFactory --> ILadoStrategy
+    ExposicaoAtivo --> ILadoStrategy
+    ExposicaoAtivo --> Eventos
+
+    classDef porta fill:#eef2ff,stroke:#4f46e5,stroke-width:2px
+    class Portas,IOrderEventObserver,IConsultasOrdens,ILadoStrategyFactory,ILadoStrategy porta
 ```
+
+As setas só andam em direção ao domínio: nenhuma sai do Domain. As cápsulas são interfaces; os números indicam a ordem do caso de uso (valida, escolhe o lado, decide).
 
 **Regra de dependência:** o domínio não conhece detalhes de infraestrutura. As implementações de persistência e mensageria dependem das abstrações definidas pelas camadas internas.
 
@@ -270,6 +262,69 @@ O domínio não conhece:
 * Blazor.
 
 Isso permite testar as regras de negócio sem depender de infraestrutura externa.
+
+### Portas e adaptadores
+
+A Application define as interfaces (portas) de que precisa; a Infrastructure as implementa (adaptadores). A seta pontilhada significa **"implementa"** e aponta para dentro: a infraestrutura depende da aplicação, nunca o contrário.
+
+```mermaid
+flowchart LR
+    subgraph INFRA["🔧 Infrastructure · os plugues"]
+        direction TB
+        subgraph EF["EF Core · OrderAccumulatorDbContext"]
+            direction TB
+            EfUnitOfWork["EfUnitOfWork"]
+            EfExposicaoRepository["EfExposicaoRepository<br/>SELECT ... FOR UPDATE"]
+            EfOrdensAceitas["EfOrdensAceitas"]
+            EfOutbox["EfOutbox"]
+            EfConsultasOrdens["EfConsultasOrdens"]
+        end
+        LogOrderObserver["LogOrderObserver"]
+        OutboxPublisher["OutboxPublisher<br/>BackgroundService"]
+    end
+
+    subgraph APP["⚙️ Application · as tomadas"]
+        direction TB
+        IUnitOfWork(["IUnitOfWork · ITransacao"])
+        IExposicaoRepository(["IExposicaoRepository"])
+        IOrdensAceitas(["IOrdensAceitas"])
+        IOutbox(["IOutbox"])
+        IConsultasOrdens(["IConsultasOrdens"])
+        IOrderEventObserver(["IOrderEventObserver"])
+    end
+
+    OrdemProcessadaMensagem["📄 Contracts<br/>OrdemProcessadaMensagem"]
+    PG[("PostgreSQL")]
+    KAFKA[("Kafka")]
+
+    EfUnitOfWork -.-> IUnitOfWork
+    EfExposicaoRepository -.-> IExposicaoRepository
+    EfOrdensAceitas -.-> IOrdensAceitas
+    EfOutbox -.-> IOutbox
+    EfConsultasOrdens -.-> IConsultasOrdens
+    LogOrderObserver -.-> IOrderEventObserver
+
+    EF --> PG
+    EfOutbox -->|traduz para| OrdemProcessadaMensagem
+    OutboxPublisher -->|lê pendentes| PG
+    OutboxPublisher -->|publica| KAFKA
+
+    classDef porta fill:#eef2ff,stroke:#4f46e5,stroke-width:2px
+    classDef externo fill:#f1f5f9,stroke:#64748b
+    class IUnitOfWork,IExposicaoRepository,IOrdensAceitas,IOutbox,IConsultasOrdens,IOrderEventObserver porta
+    class PG,KAFKA,OrdemProcessadaMensagem externo
+```
+
+| Porta (Application) | Adaptador (Infrastructure) | Responsabilidade |
+| ------------------- | -------------------------- | ---------------- |
+| `IUnitOfWork` / `ITransacao` | `EfUnitOfWork` | Abre, confirma ou desfaz a transação |
+| `IExposicaoRepository` | `EfExposicaoRepository` | Lê a exposição com `FOR UPDATE` e reconstrói o agregado |
+| `IOrdensAceitas` | `EfOrdensAceitas` | Consulta e registra as ordens aceitas |
+| `IOutbox` | `EfOutbox` | Traduz o evento de domínio para o evento de integração e o grava |
+| `IConsultasOrdens` | `EfConsultasOrdens` | Consultas de leitura das telas |
+| `IOrderEventObserver` | `LogOrderObserver` | Efeito local após o commit (log estruturado) |
+
+O `OutboxPublisher` não implementa porta: é um serviço em segundo plano que leva as mensagens da Outbox ao Kafka.
 
 ---
 
